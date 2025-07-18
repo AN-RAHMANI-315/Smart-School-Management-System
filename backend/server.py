@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,10 +6,9 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import uuid
 from datetime import datetime
-
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,32 +24,97 @@ app = FastAPI()
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
-
 # Define Models
-class StatusCheck(BaseModel):
+class Student(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    name: str
+    age: int
+    class_name: str
+    gender: str
+    contact_info: str
+    parent_name: Optional[str] = None
+    parent_phone: Optional[str] = None
+    address: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class StudentCreate(BaseModel):
+    name: str
+    age: int
+    class_name: str
+    gender: str
+    contact_info: str
+    parent_name: Optional[str] = None
+    parent_phone: Optional[str] = None
+    address: Optional[str] = None
 
-# Add your routes to the router instead of directly to app
+class StudentUpdate(BaseModel):
+    name: Optional[str] = None
+    age: Optional[int] = None
+    class_name: Optional[str] = None
+    gender: Optional[str] = None
+    contact_info: Optional[str] = None
+    parent_name: Optional[str] = None
+    parent_phone: Optional[str] = None
+    address: Optional[str] = None
+
+# Student routes
+@api_router.post("/students", response_model=Student)
+async def create_student(student: StudentCreate):
+    student_dict = student.dict()
+    student_obj = Student(**student_dict)
+    
+    # Check if student with same name already exists
+    existing_student = await db.students.find_one({"name": student_obj.name})
+    if existing_student:
+        raise HTTPException(status_code=400, detail="Student with this name already exists")
+    
+    _ = await db.students.insert_one(student_obj.dict())
+    return student_obj
+
+@api_router.get("/students", response_model=List[Student])
+async def get_students():
+    students = await db.students.find().to_list(1000)
+    return [Student(**student) for student in students]
+
+@api_router.get("/students/{student_id}", response_model=Student)
+async def get_student(student_id: str):
+    student = await db.students.find_one({"id": student_id})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return Student(**student)
+
+@api_router.put("/students/{student_id}", response_model=Student)
+async def update_student(student_id: str, student_update: StudentUpdate):
+    student = await db.students.find_one({"id": student_id})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    update_dict = student_update.dict(exclude_unset=True)
+    update_dict["updated_at"] = datetime.utcnow()
+    
+    await db.students.update_one({"id": student_id}, {"$set": update_dict})
+    
+    updated_student = await db.students.find_one({"id": student_id})
+    return Student(**updated_student)
+
+@api_router.delete("/students/{student_id}")
+async def delete_student(student_id: str):
+    student = await db.students.find_one({"id": student_id})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    await db.students.delete_one({"id": student_id})
+    return {"message": "Student deleted successfully"}
+
+@api_router.get("/students/class/{class_name}", response_model=List[Student])
+async def get_students_by_class(class_name: str):
+    students = await db.students.find({"class_name": class_name}).to_list(1000)
+    return [Student(**student) for student in students]
+
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
+    return {"message": "Smart School Management System API", "version": "1.0"}
 
 # Include the router in the main app
 app.include_router(api_router)
